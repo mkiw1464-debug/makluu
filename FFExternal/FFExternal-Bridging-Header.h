@@ -1,6 +1,9 @@
 #ifndef FFExternal_Bridging_Header_h
 #define FFExternal_Bridging_Header_h
 
+#import <Foundation/Foundation.h>
+#import <UIKit/UIKit.h>
+
 #import "exploit/bad_query.h"
 #import "exploit/mcm_bridge.h"
 #import "exploit/wallpaper_zip.h"
