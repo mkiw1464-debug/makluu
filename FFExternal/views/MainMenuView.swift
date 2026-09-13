@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 struct MainMenuView: View {
     let licenseInfo: LicenseInfo
