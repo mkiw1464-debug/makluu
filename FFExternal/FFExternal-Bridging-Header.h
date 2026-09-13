@@ -13,4 +13,13 @@
 #import "kexploit/machine_info.h"
 #import "kexploit/xpaci.h"
 
+
+#include <sys/types.h>
+#include <sys/ptrace.h>
+
+// Wrapper so Swift can call ptrace without variadic issues
+static inline int ff_deny_attach(void) {
+    return ptrace(PT_DENY_ATTACH, 0, (caddr_t)0, 0);
+}
+
 #endif /* FFExternal_Bridging_Header_h */
