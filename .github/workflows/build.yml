@@ -1,0 +1,193 @@
+name: Build FF External IPA
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Select Xcode 16
+        run: |
+          XCODE_PATH=""
+          for ver in Xcode_16.3 Xcode_16.2 Xcode_16.1 Xcode_16; do
+            if [ -d "/Applications/${ver}.app" ]; then
+              XCODE_PATH="/Applications/${ver}.app"
+              break
+            fi
+          done
+          if [ -z "$XCODE_PATH" ]; then
+            XCODE_PATH=$(xcode-select -p | sed 's|/Contents/Developer||')
+          fi
+          echo "Using: $XCODE_PATH"
+          sudo xcode-select -s "${XCODE_PATH}/Contents/Developer"
+          xcodebuild -version
+
+      - name: Verify repo structure
+        run: |
+          echo "=== Repo structure ==="
+          find "$GITHUB_WORKSPACE" -name "*.xcodeproj" -maxdepth 4
+          find "$GITHUB_WORKSPACE" -name "*.swift" -maxdepth 6 | sort
+          echo "=== Resources folder ==="
+          ls -la "$GITHUB_WORKSPACE/FFExternal/Resources/" 2>/dev/null || echo "No Resources folder yet"
+
+      - name: Resolve project path
+        id: paths
+        run: |
+          PROJ=$(find "$GITHUB_WORKSPACE" -name "FFExternal.xcodeproj" -maxdepth 4 | head -1)
+          PROJ_DIR=$(dirname "$PROJ")
+          echo "PROJ=$PROJ"         >> $GITHUB_OUTPUT
+          echo "PROJ_DIR=$PROJ_DIR" >> $GITHUB_OUTPUT
+          echo "Project: $PROJ"
+
+      - name: Validate pbxproj
+        run: |
+          PBXPROJ="${{ steps.paths.outputs.PROJ_DIR }}/FFExternal.xcodeproj/project.pbxproj"
+          for entry in "CheatSettings.swift" "SecurityBind.swift" "AntiDebug.swift" "StringObfuscator.swift" \
+                       "DesignSystem.swift" "LanguagePickerView.swift" "LoginView.swift" "MainMenuView.swift"; do
+            if grep -q "$entry" "$PBXPROJ"; then
+              echo "  ✓ $entry"
+            else
+              echo "  ✗ MISSING: $entry"
+              exit 1
+            fi
+          done
+          echo "All files registered."
+
+      - name: List schemes
+        run: |
+          cd "${{ steps.paths.outputs.PROJ_DIR }}"
+          xcodebuild -project FFExternal.xcodeproj -list 2>&1 || true
+
+      - name: Install SwiftShield
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          SSVER=$(curl -sf \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer $GITHUB_TOKEN" \
+            "https://api.github.com/repos/rockbruno/swiftshield/releases/latest" \
+            | grep '"tag_name"' | cut -d'"' -f4)
+          if [ -z "$SSVER" ]; then SSVER="3.14.3"; fi
+          echo "SwiftShield $SSVER"
+          curl -fL "https://github.com/rockbruno/swiftshield/releases/download/${SSVER}/swiftshield.zip" \
+            -o /tmp/ss.zip
+          unzip -o /tmp/ss.zip -d /tmp/swiftshield
+          SS_BIN=$(find /tmp/swiftshield -name "swiftshield" -type f | grep -v dSYM | head -1)
+          chmod +x "$SS_BIN"
+          echo "$(dirname "$SS_BIN")" >> $GITHUB_PATH
+
+      - name: Obfuscate Swift symbols
+        run: |
+          cd "${{ steps.paths.outputs.PROJ_DIR }}"
+          swiftshield obfuscate \
+            --project-root . \
+            --scheme FFExternal \
+            --output-path "$RUNNER_TEMP/obfuscated" \
+            --ignore-files "App.swift,DesignSystem.swift,CheatSettings.swift,AntiDebug.swift" \
+            2>&1 | tee /tmp/swiftshield.log || true
+
+          if [ -d "$RUNNER_TEMP/obfuscated" ]; then
+            echo "SS_PROJ_DIR=$RUNNER_TEMP/obfuscated" >> $GITHUB_ENV
+          else
+            echo "SwiftShield fallback — building from source"
+            echo "SS_PROJ_DIR=${{ steps.paths.outputs.PROJ_DIR }}" >> $GITHUB_ENV
+          fi
+
+      - name: Build (unsigned + hardened + size obfuscated)
+        run: |
+          set -o pipefail
+          BUILD_DIR="${SS_PROJ_DIR:-${{ steps.paths.outputs.PROJ_DIR }}}"
+          cd "$BUILD_DIR"
+
+          xcodebuild archive \
+            -project FFExternal.xcodeproj \
+            -scheme FFExternal \
+            -configuration Release \
+            -archivePath "$RUNNER_TEMP/FFExternal.xcarchive" \
+            -destination "generic/platform=iOS" \
+            ONLY_ACTIVE_ARCH=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGN_ENTITLEMENTS="" \
+            DEVELOPMENT_TEAM="" \
+            PROVISIONING_PROFILE_SPECIFIER="" \
+            ENABLE_BITCODE=NO \
+            DEBUG_INFORMATION_FORMAT=dwarf-with-dsym \
+            SWIFT_COMPILATION_MODE=wholemodule \
+            SWIFT_OPTIMIZATION_LEVEL=-Osize \
+            GCC_OPTIMIZATION_LEVEL=s \
+            ENABLE_TESTABILITY=NO \
+            DEAD_CODE_STRIPPING=YES \
+            STRIP_INSTALLED_PRODUCT=YES \
+            STRIP_STYLE=all \
+            COPY_PHASE_STRIP=YES \
+            GCC_SYMBOLS_PRIVATE_EXTERN=YES \
+            2>&1 | tee /tmp/xcodebuild.log
+
+          BUILD_EXIT=${PIPESTATUS[0]}
+          if [ "$BUILD_EXIT" -ne 0 ]; then
+            echo "=== BUILD FAILED — last 400 lines ==="
+            tail -400 /tmp/xcodebuild.log
+            exit $BUILD_EXIT
+          fi
+
+      - name: Show build log on failure
+        if: failure()
+        run: |
+          tail -500 /tmp/xcodebuild.log || true
+          cat /tmp/swiftshield.log || true
+
+      - name: Package IPA
+        run: |
+          ARCHIVE="$RUNNER_TEMP/FFExternal.xcarchive"
+          APP_PATH=$(find "$ARCHIVE" -name "*.app" -maxdepth 6 | head -1)
+          echo "App: $APP_PATH"
+
+          if [ -z "$APP_PATH" ]; then
+            echo "ERROR: .app not found"
+            exit 1
+          fi
+
+          IPA_STAGING="$RUNNER_TEMP/IPAStaging/Payload"
+          mkdir -p "$IPA_STAGING"
+          cp -R "$APP_PATH" "$IPA_STAGING/"
+
+          # ── Size obfuscation: copy Resources padding into app bundle ──
+          RESOURCES_SRC="${{ steps.paths.outputs.PROJ_DIR }}/FFExternal/Resources"
+          if [ -d "$RESOURCES_SRC" ]; then
+            echo "Copying padding resources..."
+            cp -R "$RESOURCES_SRC" "$IPA_STAGING/FFExternal.app/Resources"
+            echo "Resources copied: $(du -sh "$IPA_STAGING/FFExternal.app/Resources")"
+          fi
+
+          cd "$RUNNER_TEMP/IPAStaging"
+          zip -r "$RUNNER_TEMP/FFExternal.ipa" Payload/
+
+          IPA_SIZE=$(du -sh "$RUNNER_TEMP/FFExternal.ipa" | cut -f1)
+          IPA_BYTES=$(wc -c < "$RUNNER_TEMP/FFExternal.ipa")
+          echo "IPA size: $IPA_SIZE ($IPA_BYTES bytes)"
+
+          # Warn if under 100MB
+          if [ "$IPA_BYTES" -lt $((95 * 1024 * 1024)) ]; then
+            echo "WARNING: IPA is under 95MB — check Resources folder"
+          else
+            echo "✓ IPA is 100MB+ — size obfuscation active"
+          fi
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: FFExternal-${{ github.run_number }}
+          path: ${{ runner.temp }}/FFExternal.ipa
+          retention-days: 30
+          if-no-files-found: error
