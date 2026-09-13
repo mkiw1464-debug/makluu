@@ -109,12 +109,14 @@ jobs:
           BUILD_DIR="${SS_PROJ_DIR:-${{ steps.paths.outputs.PROJ_DIR }}}"
           cd "$BUILD_DIR"
 
-          xcodebuild archive \
+          BUILD_OUT="$RUNNER_TEMP/build_output"
+
+          xcodebuild build \
             -project FFExternal.xcodeproj \
             -scheme FFExternal \
             -configuration Release \
-            -archivePath "$RUNNER_TEMP/FFExternal.xcarchive" \
             -sdk iphoneos \
+            -derivedDataPath "$RUNNER_TEMP/DerivedData" \
             ONLY_ACTIVE_ARCH=NO \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGN_IDENTITY="" \
@@ -132,6 +134,7 @@ jobs:
             STRIP_STYLE=all \
             COPY_PHASE_STRIP=YES \
             GCC_SYMBOLS_PRIVATE_EXTERN=YES \
+            CONFIGURATION_BUILD_DIR="$BUILD_OUT" \
             2>&1 | tee /tmp/xcodebuild.log
 
           BUILD_EXIT=${PIPESTATUS[0]}
@@ -141,6 +144,8 @@ jobs:
             exit $BUILD_EXIT
           fi
 
+          echo "BUILD_OUT=$BUILD_OUT" >> $GITHUB_ENV
+
       - name: Show build log on failure
         if: failure()
         run: |
@@ -149,12 +154,18 @@ jobs:
 
       - name: Package IPA
         run: |
-          ARCHIVE="$RUNNER_TEMP/FFExternal.xcarchive"
-          APP_PATH=$(find "$ARCHIVE" -name "*.app" -maxdepth 6 | head -1)
-          echo "App: $APP_PATH"
+          BUILD_OUT="${BUILD_OUT:-$RUNNER_TEMP/build_output}"
+          APP_PATH=$(find "$BUILD_OUT" -name "FFExternal.app" -maxdepth 4 | head -1)
 
           if [ -z "$APP_PATH" ]; then
+            # fallback: search derived data
+            APP_PATH=$(find "$RUNNER_TEMP/DerivedData" -name "FFExternal.app" -not -path "*.dSYM/*" | head -1)
+          fi
+
+          echo "App: $APP_PATH"
+          if [ -z "$APP_PATH" ]; then
             echo "ERROR: .app not found"
+            find "$RUNNER_TEMP" -name "*.app" 2>/dev/null | head -10
             exit 1
           fi
 
@@ -162,27 +173,18 @@ jobs:
           mkdir -p "$IPA_STAGING"
           cp -R "$APP_PATH" "$IPA_STAGING/"
 
-          # ── Size obfuscation: copy Resources padding into app bundle ──
+          # ── Size obfuscation: copy Resources padding ──
           RESOURCES_SRC="${{ steps.paths.outputs.PROJ_DIR }}/FFExternal/Resources"
           if [ -d "$RESOURCES_SRC" ]; then
-            echo "Copying padding resources..."
             cp -R "$RESOURCES_SRC" "$IPA_STAGING/FFExternal.app/Resources"
-            echo "Resources copied: $(du -sh "$IPA_STAGING/FFExternal.app/Resources")"
+            echo "Resources: $(du -sh "$IPA_STAGING/FFExternal.app/Resources")"
           fi
 
           cd "$RUNNER_TEMP/IPAStaging"
           zip -r "$RUNNER_TEMP/FFExternal.ipa" Payload/
 
-          IPA_SIZE=$(du -sh "$RUNNER_TEMP/FFExternal.ipa" | cut -f1)
           IPA_BYTES=$(wc -c < "$RUNNER_TEMP/FFExternal.ipa")
-          echo "IPA size: $IPA_SIZE ($IPA_BYTES bytes)"
-
-          # Warn if under 100MB
-          if [ "$IPA_BYTES" -lt $((95 * 1024 * 1024)) ]; then
-            echo "WARNING: IPA is under 95MB — check Resources folder"
-          else
-            echo "✓ IPA is 100MB+ — size obfuscation active"
-          fi
+          echo "IPA size: $(du -sh "$RUNNER_TEMP/FFExternal.ipa" | cut -f1) ($IPA_BYTES bytes)"
 
       - name: Upload IPA
         uses: actions/upload-artifact@v4
