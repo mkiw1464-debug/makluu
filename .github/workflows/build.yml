@@ -115,8 +115,8 @@ jobs:
             -project FFExternal.xcodeproj \
             -scheme FFExternal \
             -configuration Release \
-            -sdk iphoneos \
             -derivedDataPath "$RUNNER_TEMP/DerivedData" \
+            SDKROOT=iphoneos \
             ONLY_ACTIVE_ARCH=NO \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGN_IDENTITY="" \
@@ -175,12 +175,7 @@ jobs:
           mkdir -p "$IPA_STAGING"
           cp -R "$APP_PATH" "$IPA_STAGING/"
 
-          # ── Size obfuscation: copy Resources padding ──
-          RESOURCES_SRC="${{ steps.paths.outputs.PROJ_DIR }}/FFExternal/Resources"
-          if [ -d "$RESOURCES_SRC" ]; then
-            cp -R "$RESOURCES_SRC" "$IPA_STAGING/FFExternal.app/Resources"
-            echo "Resources: $(du -sh "$IPA_STAGING/FFExternal.app/Resources")"
-          fi
+          # Resources padding removed - causes Esign timeout on large IPA
 
           cd "$RUNNER_TEMP/IPAStaging"
           zip -r "$RUNNER_TEMP/FFExternal.ipa" Payload/
