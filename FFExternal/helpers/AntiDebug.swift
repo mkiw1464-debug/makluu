@@ -39,12 +39,8 @@ enum AntiDebug {
         sysctl(&mib, 4, &info, &size, nil, 0)
         if (info.kp_proc.p_flag & P_TRACED) != 0 { return true }
 
-        // Method 2: PT_DENY_ATTACH via syscall (avoids direct ptrace symbol)
-        // syscall(26) = ptrace, PT_DENY_ATTACH = 31
-        #if arch(arm64)
-        let result = syscall(26, 31, 0, 0, 0)
-        if result != 0 { return true }
-        #endif
+        // Method 2: PT_DENY_ATTACH via C wrapper in bridging header
+        if ff_deny_attach() != 0 { return true }
 
         return false
     }
