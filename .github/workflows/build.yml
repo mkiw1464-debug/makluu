@@ -152,6 +152,8 @@ jobs:
           tail -500 /tmp/xcodebuild.log || true
           cat /tmp/swiftshield.log || true
 
+
+
       - name: Package IPA
         run: |
           BUILD_OUT="${BUILD_OUT:-$RUNNER_TEMP/build_output}"
