@@ -151,8 +151,8 @@ enum BPlistWriter {
     private static func encodeIntObj(_ v: Int) -> [UInt8] {
         if v < 256   { return [0x10, UInt8(v)] }
         if v < 65536 { return [0x11, UInt8((v >> 8) & 0xFF), UInt8(v & 0xFF)] }
-        return [0x12, UInt8((v>>24)&0xFF), UInt8((v>>16)&0xFF),
-                      UInt8((v>>8) &0xFF), UInt8(v&0xFF)]
+        if v < 16777216 { return [0x12, UInt8((v>>16)&0xFF), UInt8((v>>8)&0xFF), UInt8(v&0xFF)] }
+        return [0x12, UInt8((v>>24)&0xFF), UInt8((v>>16)&0xFF), UInt8((v>>8)&0xFF), UInt8(v&0xFF)]
     }
 
     private static func encodeRef(_ i: Int, sz: Int) -> [UInt8] { encodeInt(i, sz: sz) }
