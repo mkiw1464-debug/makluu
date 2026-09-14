@@ -159,8 +159,10 @@ enum BPlistWriter {
 
     private static func encodeInt(_ v: Int, sz: Int) -> [UInt8] {
         var d = [UInt8]()
-        for shift in stride(from: (sz - 1) * 8, through: 0, by: -8) {
-            d.append(UInt8((v >> shift) & 0xFF))
+        var i = sz - 1
+        while i >= 0 {
+            d.append(UInt8((v >> (i * 8)) & 0xFF))
+            i -= 1
         }
         return d
     }
