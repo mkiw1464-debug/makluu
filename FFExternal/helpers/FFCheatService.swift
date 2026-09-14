@@ -102,7 +102,8 @@ enum FFCheatManifest {
     }
 
     static func checkAvailability(game: FFGame) async -> Bool {
-        for name in [CheatDocs.patchBytes, game.plistFileName] {
+        // Only need Assembly patch from gblok - plist generated locally
+        for name in [CheatDocs.patchBytes] {
             guard let url = rawURL(fileName: name) else { return false }
             var req = URLRequest(url: url); req.httpMethod = "HEAD"; req.timeoutInterval = 8
             do {
@@ -190,9 +191,11 @@ enum FFCheatService {
         }
         try? fm.createDirectory(at: plistTarget.deletingLastPathComponent(), withIntermediateDirectories: true)
 
-        let plistData = try await FFCheatManifest.download(fileName: game.plistFileName)
+        // Generate plist from scratch with correct PlayerPrefs values
+        // No leaked content — 100% generated from user settings
+        let plistData = PlistGenerator.generate(settings: settings, game: game)
         try writeAtomic(data: plistData, to: plistTarget, fm: fm)
-        log("inject OK: \(game.plistFileName)")
+        log("inject OK: \(game.plistFileName) (generated \(plistData.count) bytes)")
         log("INJECT COMPLETE \(bundleID)")
     }
 
